@@ -64,7 +64,7 @@ def download_weights(url, dest):
 
 class Predictor(BasePredictor):
 
-    def load_lora(self, weights, pipe):
+    def load_lora(self, weights, pipe, scale):
         print("Loading Unet LoRA")
         self.is_lora = True
         weights = str(weights)
@@ -72,6 +72,7 @@ class Predictor(BasePredictor):
         local_weights_cache = self.weights_cache.ensure(weights)
         self.path = os.path.join(local_weights_cache, "lora.safetensors")
         pipe.load_lora_weights(self.path, adapter_name="lora")
+        pipe.set_adapters(["lora"], adapter_weights=[scale])
         handler = TokenEmbeddingsHandler(
             [pipe.text_encoder, pipe.text_encoder_2], [pipe.tokenizer, pipe.tokenizer_2]
         )
@@ -85,7 +86,6 @@ class Predictor(BasePredictor):
         self.tuned_model = True
 
     def unload_lora(self, pipe):
-        shutil.rmtree(self.path)
         pipe.unload_lora_weights()
         self.tuned_model = False
 
@@ -126,15 +126,6 @@ class Predictor(BasePredictor):
         )
 
         print("Loading SDXL Controlnet pipeline...")
-        self.control_text2img_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
-            SDXL_MODEL_CACHE,
-            controlnet=controlnet,
-            torch_dtype=torch.float16,
-            image_encoder=self.image_encoder,
-            use_safetensors=True,
-            variant="fp16",
-        )
-        self.control_text2img_pipe.to("cuda")
 
         self.control_img2img_pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
             SDXL_MODEL_CACHE,
@@ -144,14 +135,13 @@ class Predictor(BasePredictor):
             use_safetensors=True,
             variant="fp16",
         )
-        self.control_text2img_pipe.to("cuda")
+        self.control_img2img_pipe.to("cuda")
         
         self.control_img2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus-face_sdxl_vit-h.safetensors")
-        self.control_text2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus-face_sdxl_vit-h.safetensors")
 
         self.is_lora = False
         if weights or os.path.exists("./trained-model"):
-            self.load_lora(weights, self.control_text2img_pipe)
+            self.load_lora(weights, self.control_img2img_pipe)
 
         print("setup took: ", time.time() - start)
 
@@ -237,10 +227,6 @@ class Predictor(BasePredictor):
             description="Input image for img2img or inpaint mode",
             default=None,
         ),
-        img2img: bool = Input(
-            description="Use img2img pipeline, it will use the image input both as the control image and the base image.",
-            default=None
-        ),
         condition_scale: float = Input(
             description="The bigger this number is, the more ControlNet interferes",
             default=0.5,
@@ -251,7 +237,7 @@ class Predictor(BasePredictor):
             description="LoRA additive scale. Only applicable on trained models.",
             ge=0.0,
             le=1.0,
-            default=0.95,
+            default=0.9,
         ),
         ip_scale: float = Input(
             description="IP Adapter strength.",
@@ -261,7 +247,7 @@ class Predictor(BasePredictor):
         ),
         strength: float = Input(
             description="When img2img is active, the denoising strength. 1 means total destruction of the input image.",
-            default=0.7,
+            default=0.9,
             ge=0.0,
             le=1.0,
         ),
@@ -302,13 +288,16 @@ class Predictor(BasePredictor):
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
-
+        
+        pipe = self.control_img2img_pipe
+        pipe.set_ip_adapter_scale(ip_scale)
+        
         if lora_weights:
-            self.load_lora(lora_weights, self.control_text2img_pipe)
+            self.load_lora(lora_weights, pipe, lora_scale)
 
         # OOMs can leave vae in bad state
-        if self.control_text2img_pipe.vae.dtype == torch.float32:
-            self.control_text2img_pipe.vae.to(dtype=torch.float16)
+        if self.control_img2img_pipe.vae.dtype == torch.float32:
+            self.control_img2img_pipe.vae.to(dtype=torch.float16)
 
         sdxl_kwargs = {}
         if self.tuned_model:
@@ -319,24 +308,13 @@ class Predictor(BasePredictor):
         image = self.load_image(image)
         resized_image, width, height = self.resize_image(image)
 
-        if (img2img) :
-            print("img2img mode")
-            sdxl_kwargs["image"] = resized_image
-            sdxl_kwargs["control_image"] = self.get_depth_map(image)
-            sdxl_kwargs["ip_adapter_image"] = image
-            sdxl_kwargs["strength"] = strength
-            sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
-            sdxl_kwargs["width"] = width
-            sdxl_kwargs["height"] = height
-            pipe = self.control_text2img_pipe
-        else:
-            print("txt2img mode")
-            sdxl_kwargs["image"] = self.get_depth_map(image)
-            sdxl_kwargs["ip_adapter_image"] = image
-            sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
-            sdxl_kwargs["width"] = width
-            sdxl_kwargs["height"] = height
-            pipe = self.control_text2img_pipe
+        sdxl_kwargs["image"] = resized_image
+        sdxl_kwargs["control_image"] = self.get_depth_map(image)
+        sdxl_kwargs["ip_adapter_image"] = image
+        sdxl_kwargs["strength"] = strength
+        sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
+        sdxl_kwargs["width"] = width
+        sdxl_kwargs["height"] = height
 
         if not apply_watermark:
             # toggles watermark for this prediction
@@ -344,7 +322,6 @@ class Predictor(BasePredictor):
             pipe.watermark = None
 
         pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-        pipe.set_ip_adapter_scale(ip_scale)
 
         generator = torch.Generator("cuda").manual_seed(seed)
 
@@ -356,8 +333,7 @@ class Predictor(BasePredictor):
             "num_inference_steps": num_inference_steps,
         }
 
-        if self.is_lora:
-            sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
+        sdxl_kwargs["cross_attention_kwargs"] = {"scale": 1}
 
         output = pipe(**common_args, **sdxl_kwargs)
 
@@ -374,5 +350,7 @@ class Predictor(BasePredictor):
             raise Exception(
                 f"NSFW content detected. Try running it again, or try a different prompt."
             )
+        
+        self.unload_lora(pipe)
 
         return output_paths

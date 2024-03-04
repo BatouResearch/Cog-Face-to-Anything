@@ -1,0 +1,26 @@
+# Configuration for Cog ⚙️
+# Reference: https://github.com/replicate/cog/blob/main/docs/yaml.md
+
+build:
+  gpu: true
+  cuda: "11.8"
+  python_version: "3.9"
+  system_packages:
+    - "libgl1-mesa-glx"
+    - "ffmpeg"
+    - "libsm6"
+    - "libxext6"
+    - "wget"
+  python_packages:
+    - "diffusers==0.21.4"
+    - "torch==2.0.1"
+    - "transformers==4.34.0"
+    - "invisible-watermark==0.2.0"
+    - "accelerate==0.21.0"
+    - "torchvision==0.15.2"
+    - "numpy==1.25.1"
+
+  run:
+    - curl -o /usr/local/bin/pget -L "https://github.com/replicate/pget/releases/download/v0.0.3/pget" && chmod +x /usr/local/bin/pget
+
+predict: "predict.py:Predictor"

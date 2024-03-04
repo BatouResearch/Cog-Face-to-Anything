@@ -344,7 +344,7 @@ class Predictor(BasePredictor):
             pipe.watermark = None
 
         pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-        #pipe.set_ip_adapter_scale(ip_scale)
+        pipe.set_ip_adapter_scale(ip_scale)
 
         generator = torch.Generator("cuda").manual_seed(seed)
 

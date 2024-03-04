@@ -72,6 +72,16 @@ class Predictor(BasePredictor):
         local_weights_cache = self.weights_cache.ensure(weights)
         self.path = os.path.join(local_weights_cache, "lora.safetensors")
         pipe.load_lora_weights(self.path, adapter_name="lora")
+        handler = TokenEmbeddingsHandler(
+            [pipe.text_encoder, pipe.text_encoder_2], [pipe.tokenizer, pipe.tokenizer_2]
+        )
+        handler.load_embeddings(os.path.join(local_weights_cache, "embeddings.pti"))
+
+        # load params
+        with open(os.path.join(local_weights_cache, "special_params.json"), "r") as f:
+            params = json.load(f)
+        self.token_map = params
+
         self.tuned_model = True
 
     def unload_lora(self, pipe):
@@ -241,13 +251,13 @@ class Predictor(BasePredictor):
             description="LoRA additive scale. Only applicable on trained models.",
             ge=0.0,
             le=1.0,
-            default=0.6,
+            default=0.95,
         ),
         ip_scale: float = Input(
             description="IP Adapter strength.",
             ge=0.0,
             le=1.0,
-            default=0.3,
+            default=0.2,
         ),
         strength: float = Input(
             description="When img2img is active, the denoising strength. 1 means total destruction of the input image.",

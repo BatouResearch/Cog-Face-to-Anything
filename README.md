@@ -1,4 +1,4 @@
-# Cog SDXL Canny ControlNet with LoRA support
+# Cog SDXL Depth ControlNet with LoRA support and IP-Adapter
 
 [![Replicate demo and cloud API](https://replicate.com/stability-ai/sdxl/badge)](https://replicate.com/batouresearch/sdxl-controlnet-lora)
 
@@ -16,7 +16,6 @@ You may need to increase the default `lora_scale` value to big values such as <s
 ## Limitations
 - `lora_weights` only accepts models trained in Replicate and is a mandatory parameter.
 - `expert_ensemble_refiner` is currently not supported, you can use `base_image_refiner` instead.
-- For the moment, the model only uses canny as the conditional image.
 
 <br>
 <strong>For further improvements of this project, feel free to fork and PR!</strong>

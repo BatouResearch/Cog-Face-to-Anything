@@ -70,7 +70,7 @@ class Predictor(BasePredictor):
         weights = str(weights)
         self.tuned_weights = weights
         local_weights_cache = self.weights_cache.ensure(weights)
-        self.path = os.path.join(local_weights_cache, "unet.safetensors")
+        self.path = os.path.join(local_weights_cache, "lora.safetensors")
         pipe.load_lora_weights(self.path, adapter_name="lora")
         self.tuned_model = True
 

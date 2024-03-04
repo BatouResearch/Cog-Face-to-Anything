@@ -3,7 +3,8 @@ from diffusers import AutoencoderKL, DiffusionPipeline, ControlNetModel
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
-CONTROL_CACHE = "./control-cache"
+CONTROL_DEPTH_CACHE = "./control-depth-cache"
+CONTROL_CANNY_CACHE = "./control-canny-cache"
 SDXL_MODEL_CACHE = "./sdxl-cache"
 SAFETY_CACHE = "./safety-cache"
 FEATURE_NAME = "Intel/dpt-hybrid-midas"
@@ -32,7 +33,14 @@ controlnet = ControlNetModel.from_pretrained(
     "diffusers/controlnet-depth-sdxl-1.0",
     torch_dtype=torch.float16
 )
-controlnet.save_pretrained(CONTROL_CACHE)
+controlnet.save_pretrained(CONTROL_DEPTH_CACHE)
+
+controlnet = ControlNetModel.from_pretrained(
+    "diffusers/controlnet-canny-sdxl-1.0",
+    torch_dtype=torch.float16
+)
+controlnet.save_pretrained(CONTROL_CANNY_CACHE)
+
 
 depth_estimator = DPTForDepthEstimation.from_pretrained(FEATURE_NAME)
 depth_estimator.save_pretrained(FEATURE_CACHE)

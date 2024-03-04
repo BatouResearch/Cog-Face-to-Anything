@@ -3,6 +3,8 @@ import os
 import shutil
 import subprocess
 import time
+
+import cv2
 import torch
 from typing import List, Optional, Tuple, Union
 from weights import WeightsDownloadCache
@@ -21,17 +23,16 @@ from diffusers import (
     StableDiffusionXLControlNetImg2ImgPipeline,
     ControlNetModel
 )
-from diffusers.models.attention_processor import LoRAAttnProcessor2_0
 from diffusers.pipelines.stable_diffusion.safety_checker import (
     StableDiffusionSafetyChecker,
 )
 from diffusers.utils import load_image
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
-from safetensors.torch import load_file
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 from dataset_and_utils import TokenEmbeddingsHandler
 
-CONTROL_CACHE = "./control-cache"
+CONTROL_DEPTH_CACHE = "./control-depth-cache"
+CONTROL_CANNY_CACHE = "./control-canny-cache"
 SDXL_MODEL_CACHE = "./sdxl-cache"
 SAFETY_CACHE = "./safety-cache"
 FEATURE_CACHE = "./feature-cache"
@@ -114,11 +115,17 @@ class Predictor(BasePredictor):
         self.depth_estimator = DPTForDepthEstimation.from_pretrained(FEATURE_CACHE).to("cuda")
         self.feature_extractor = DPTFeatureExtractor.from_pretrained(FEATURE_CACHE)
 
-        controlnet = ControlNetModel.from_pretrained(
-            CONTROL_CACHE,
-            torch_dtype=torch.float16,
-        )
-               
+        controlnet = [
+            ControlNetModel.from_pretrained(
+                CONTROL_DEPTH_CACHE,
+                torch_dtype=torch.float16,
+            ),
+            ControlNetModel.from_pretrained(
+                CONTROL_CANNY_CACHE,
+                torch_dtype=torch.float16,
+            )
+        ]
+
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
             "h94/IP-Adapter",
             subfolder="models/image_encoder",
@@ -205,16 +212,12 @@ class Predictor(BasePredictor):
         image = Image.fromarray((image * 255.0).clip(0, 255).astype(np.uint8))
         return image
 
-    def run_safety_checker(self, image):
-        safety_checker_input = self.feature_extractor(image, return_tensors="pt").to(
-            "cuda"
-        )
-        np_image = [np.array(val) for val in image]
-        image, has_nsfw_concept = self.safety_checker(
-            images=np_image,
-            clip_input=safety_checker_input.pixel_values.to(torch.float16),
-        )
-        return image, has_nsfw_concept
+    def image2canny(self, image):
+        image = np.array(image)
+        image = cv2.Canny(image, 100, 200)
+        image = image[:, :, None]
+        image = np.concatenate([image, image, image], axis=2)
+        return Image.fromarray(image)
 
     @torch.inference_mode()
     def predict(
@@ -227,7 +230,13 @@ class Predictor(BasePredictor):
             description="Input image for img2img or inpaint mode",
             default=None,
         ),
-        condition_scale: float = Input(
+        condition_depth_scale: float = Input(
+            description="The bigger this number is, the more ControlNet interferes",
+            default=0.5,
+            ge=0.0,
+            le=2.0,
+        ),
+        condition_canny_scale: float = Input(
             description="The bigger this number is, the more ControlNet interferes",
             default=0.5,
             ge=0.0,
@@ -309,10 +318,10 @@ class Predictor(BasePredictor):
         resized_image, width, height = self.resize_image(image)
 
         sdxl_kwargs["image"] = resized_image
-        sdxl_kwargs["control_image"] = self.get_depth_map(image)
+        sdxl_kwargs["control_image"] = [self.get_depth_map(image), self.image2canny(image)]
         sdxl_kwargs["ip_adapter_image"] = image
         sdxl_kwargs["strength"] = strength
-        sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
+        sdxl_kwargs["controlnet_conditioning_scale"] = [condition_depth_scale, condition_canny_scale]
         sdxl_kwargs["width"] = width
         sdxl_kwargs["height"] = height
 

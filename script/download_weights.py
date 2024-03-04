@@ -1,12 +1,13 @@
 import torch
 from diffusers import AutoencoderKL, DiffusionPipeline, ControlNetModel
-from diffusers.pipelines.stable_diffusion.safety_checker import (
-    StableDiffusionSafetyChecker,
-)
+from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 
-CONTROL_CACHE = "control-cache"
+CONTROL_CACHE = "./control-cache"
 SDXL_MODEL_CACHE = "./sdxl-cache"
 SAFETY_CACHE = "./safety-cache"
+FEATURE_NAME = "Intel/dpt-hybrid-midas"
+FEATURE_CACHE = "./feature-cache"
 
 better_vae = AutoencoderKL.from_pretrained(
     "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
@@ -32,3 +33,9 @@ controlnet = ControlNetModel.from_pretrained(
     torch_dtype=torch.float16
 )
 controlnet.save_pretrained(CONTROL_CACHE)
+
+depth_estimator = DPTForDepthEstimation.from_pretrained(FEATURE_NAME)
+depth_estimator.save_pretrained(FEATURE_CACHE)
+
+feature_extractor = DPTFeatureExtractor.from_pretrained(FEATURE_NAME)
+feature_extractor.save_pretrained(FEATURE_CACHE)

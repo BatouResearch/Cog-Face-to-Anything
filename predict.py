@@ -28,7 +28,7 @@ from diffusers.pipelines.stable_diffusion.safety_checker import (
 from diffusers.utils import load_image
 from transformers import DPTFeatureExtractor, DPTForDepthEstimation
 from safetensors.torch import load_file
-from transformers import CLIPImageProcessor
+from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 from dataset_and_utils import TokenEmbeddingsHandler
 
 CONTROL_CACHE = "./control-cache"
@@ -179,12 +179,19 @@ class Predictor(BasePredictor):
             CONTROL_CACHE,
             torch_dtype=torch.float16,
         )
+               
+        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+            "h94/IP-Adapter",
+            subfolder="models/image_encoder",
+            torch_dtype=torch.float16
+        )
 
         print("Loading SDXL Controlnet pipeline...")
         self.control_text2img_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
             SDXL_MODEL_CACHE,
             controlnet=controlnet,
             torch_dtype=torch.float16,
+            image_encoder=self.image_encoder,
             use_safetensors=True,
             variant="fp16",
         )
@@ -193,11 +200,13 @@ class Predictor(BasePredictor):
         self.control_img2img_pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
             SDXL_MODEL_CACHE,
             controlnet=controlnet,
+            image_encoder=self.image_encoder,
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16",
         )
         self.control_text2img_pipe.to("cuda")
+        
         self.control_img2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus-face_sdxl_vit-h.safetensors")
         self.control_text2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus-face_sdxl_vit-h.safetensors")
 
@@ -369,12 +378,12 @@ class Predictor(BasePredictor):
                 prompt = prompt.replace(k, v)
         print(f"Prompt: {prompt}")
         image = self.load_image(image)
-        image, width, height = self.resize_image(image)
+        resized_image, width, height = self.resize_image(image)
 
         if (img2img) :
             print("img2img mode")
-            sdxl_kwargs["image"] = image
-            sdxl_kwargs["control_image"] = self.depth_estimator(image)
+            sdxl_kwargs["image"] = resized_image
+            sdxl_kwargs["control_image"] = self.get_depth_map(image)
             sdxl_kwargs["ip_adapter_image"] = image
             sdxl_kwargs["strength"] = strength
             sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
@@ -383,7 +392,7 @@ class Predictor(BasePredictor):
             pipe = self.control_text2img_pipe
         else:
             print("txt2img mode")
-            sdxl_kwargs["image"] = self.depth_estimator(image)
+            sdxl_kwargs["image"] = self.get_depth_map(image)
             sdxl_kwargs["ip_adapter_image"] = image
             sdxl_kwargs["controlnet_conditioning_scale"] = condition_scale
             sdxl_kwargs["width"] = width
@@ -396,7 +405,7 @@ class Predictor(BasePredictor):
             pipe.watermark = None
 
         pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
-        pipe.set_ip_adapter_scale(ip_scale)
+        #pipe.set_ip_adapter_scale(ip_scale)
 
         generator = torch.Generator("cuda").manual_seed(seed)
 
@@ -416,14 +425,8 @@ class Predictor(BasePredictor):
         if not apply_watermark:
             pipe.watermark = watermark_cache
 
-
-        _, has_nsfw_content = self.run_safety_checker(output.images)
-
         output_paths = []
-        for i, nsfw in enumerate(has_nsfw_content):
-            if nsfw:
-                print(f"NSFW content detected in image {i}")
-                continue
+        for i, nsfw in enumerate(output):
             output_path = f"/tmp/out-{i}.png"
             output.images[i].save(output_path)
             output_paths.append(Path(output_path))

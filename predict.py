@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 import time
-
+import os
 import cv2
 import torch
 from typing import List, Optional, Tuple, Union
@@ -63,10 +63,9 @@ def download_weights(url, dest):
     print("downloading took: ", time.time() - start)
 
 
-import os
 class Predictor(BasePredictor):
 
-    def load_lora(self, weights, pipe, scale, detail_scale):
+    def load_lora(self, weights, pipe, scale):
         print("Loading Unet LoRA")
         self.is_lora = True
         weights = str(weights)
@@ -74,8 +73,7 @@ class Predictor(BasePredictor):
         local_weights_cache = self.weights_cache.ensure(weights)
         self.path = os.path.join(local_weights_cache, "lora.safetensors")
         pipe.load_lora_weights(self.path, adapter_name="lora")
-        pipe.load_lora_weights("./add-detail-xl.safetensors", adapter_name="detail")
-        pipe.set_adapters(["lora", "detail"], adapter_weights=[scale, detail_scale])
+        pipe.set_adapters(["lora"], adapter_weights=[scale])
         handler = TokenEmbeddingsHandler(
             [pipe.text_encoder, pipe.text_encoder_2], [pipe.tokenizer, pipe.tokenizer_2]
         )
@@ -85,8 +83,8 @@ class Predictor(BasePredictor):
         with open(os.path.join(local_weights_cache, "special_params.json"), "r") as f:
             params = json.load(f)
         self.token_map = params
-
         self.tuned_model = True
+        
 
     def unload_lora(self, pipe):
         pipe.unload_lora_weights()
@@ -154,23 +152,22 @@ class Predictor(BasePredictor):
 
         print("setup took: ", time.time() - start)
 
-    def load_image(self, path, color="#A2A2A2", resizing=1.0):
+    def load_image(self, path, color="#A2A2A2", resizing=1):
         shutil.copyfile(path, "/tmp/image.png")
         img = Image.open("/tmp/image.png")
-        if img.mode == 'RGBA':
-            img = img.convert('RGBA')
-        background_size = (int(img.width * resizing), int(img.height * resizing))
+        original_size = img.size
+        background_size = (int(original_size[0] * resizing), int(original_size[1] * resizing))
         background = Image.new('RGB', background_size, color)
-        position = ((background_size[0] - img.size[0]) // 2, (background_size[1] - img.size[1]) // 2)
+        position = ((background_size[0] - original_size[0]) // 2, (background_size[1] - original_size[1]) // 2)
         if img.mode == 'RGBA':
-            transparent_background = Image.new('RGBA', background_size, (0, 0, 0, 0))
-            transparent_background.paste(img, position, img)
-            img = transparent_background.convert("RGB")
+            transparent_overlay = Image.new('RGBA', background_size, (0, 0, 0, 0))
+            transparent_overlay.paste(img, position, img)
+            img = Image.alpha_composite(background.convert('RGBA'), transparent_overlay).convert('RGB')
         else:
             background.paste(img, position)
             img = background
         return img
-
+        
     def resize_image(self, image):
         image_width, image_height = image.size
         print("Original width:"+str(image_width)+", height:"+str(image_height))
@@ -247,13 +244,13 @@ class Predictor(BasePredictor):
         ),
         condition_depth_scale: float = Input(
             description="The bigger this number is, the more ControlNet interferes",
-            default=0.5,
+            default=0.35,
             ge=0.0,
             le=2.0,
         ),
         condition_canny_scale: float = Input(
             description="The bigger this number is, the more ControlNet interferes",
-            default=0.5,
+            default=0.15,
             ge=0.0,
             le=2.0,
         ),
@@ -263,17 +260,11 @@ class Predictor(BasePredictor):
             le=1.0,
             default=0.9,
         ),
-        lora_detail_scale: float = Input(
-            description="More or less detail",
-            ge=-3.0,
-            le=3.0,
-            default=0,
-        ),
         ip_scale: float = Input(
             description="IP Adapter strength.",
             ge=0.0,
             le=1.0,
-            default=0.2,
+            default=0.3,
         ),
         strength: float = Input(
             description="When img2img is active, the denoising strength. 1 means total destruction of the input image.",
@@ -310,7 +301,7 @@ class Predictor(BasePredictor):
             default="K_EULER",
         ),
         guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=1, le=50, default=7.5
+            description="Scale for classifier-free guidance", ge=1, le=50, default=4
         ),
         seed: int = Input(
             description="Random seed. Leave blank to randomize the seed", default=None
@@ -330,10 +321,13 @@ class Predictor(BasePredictor):
         print(f"Using seed: {seed}")
         
         pipe = self.control_img2img_pipe
+        # Sometimes loras are not properly unloaded at the end of the execution, try again here.
+        self.unload_lora(pipe)
+        
         pipe.set_ip_adapter_scale(ip_scale)
         
         if lora_weights:
-            self.load_lora(lora_weights, pipe, lora_scale, lora_detail_scale)
+            self.load_lora(lora_weights, pipe, lora_scale)
 
         # OOMs can leave vae in bad state
         if self.control_img2img_pipe.vae.dtype == torch.float32:

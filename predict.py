@@ -144,7 +144,7 @@ class Predictor(BasePredictor):
         )
         self.control_img2img_pipe.to("cuda")
         
-        self.control_img2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus-face_sdxl_vit-h.safetensors")
+        self.control_img2img_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter-plus_sdxl_vit-h.safetensors")
 
         self.is_lora = False
         if weights or os.path.exists("./trained-model"):
@@ -239,6 +239,10 @@ class Predictor(BasePredictor):
             default="An astronaut riding a rainbow unicorn",
         ),
         image: Path = Input(
+            description="Input image",
+            default=None,
+        ),
+        ip_image: Path = Input(
             description="Input image for img2img or inpaint mode",
             default=None,
         ),
@@ -340,11 +344,12 @@ class Predictor(BasePredictor):
                 prompt = prompt.replace(k, v)
         print(f"Prompt: {prompt}")
         image = self.load_image(image, background_color, resizing_scale)
+        ip_image = self.load_image(ip_image, background_color, resizing_scale)
         resized_image, width, height = self.resize_image(image)
 
         sdxl_kwargs["image"] = resized_image
         sdxl_kwargs["control_image"] = [self.get_depth_map(image), self.image2canny(image)]
-        sdxl_kwargs["ip_adapter_image"] = image
+        sdxl_kwargs["ip_adapter_image"] = ip_image
         sdxl_kwargs["strength"] = strength
         sdxl_kwargs["controlnet_conditioning_scale"] = [condition_depth_scale, condition_canny_scale]
         sdxl_kwargs["width"] = width
